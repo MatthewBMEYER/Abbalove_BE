@@ -26,6 +26,8 @@ const userRoutes = require('./routes/userRoute');
 const teamRoutes = require('./routes/teamRoute');
 const comcellRoutes = require('./routes/comcellRoute');
 const eventRoutes = require('./routes/eventRoute');
+const videoRoutes = require('./routes/videoRoute');
+
 
 
 // Routes
@@ -33,7 +35,8 @@ app.use('/auth', authRoutes);
 app.use('/user', verifyToken, userRoutes);
 app.use('/team', verifyToken, teamRoutes);
 app.use('/comcell', verifyToken, comcellRoutes);
-app.use('/events', verifyToken, eventRoutes)
+app.use('/events', verifyToken, eventRoutes);
+app.use('/videos', verifyToken, videoRoutes);
 
 
 const PORT = process.env.PORT || 801;
