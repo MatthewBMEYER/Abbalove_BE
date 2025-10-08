@@ -28,6 +28,22 @@ const getVideos = async (req, res) => {
     }
 };
 
+// ==============================
+// Get all videos for admin ( optional search and dates )
+// ==============================
+const getVideosAdmin = async (req, res) => {
+    try {
+        const search = req.query.search || "";
+        const startDate = req.query.startDate || null;
+        const endDate = req.query.endDate || null;
+        const result = await videoService.getAllVideosAdmin(search, startDate, endDate);
+        return res.status(result.success ? 200 : 404).json(result);
+    } catch (err) {
+        console.error("getVideos controller error:", err);
+        return res.status(500).json(error("INTERNAL_ERROR", "Internal server error.", err));
+    }
+};
+
 // ================================
 // Get single video by ID
 // ================================
@@ -41,6 +57,22 @@ const getVideoById = async (req, res) => {
         return res.status(500).json(error("INTERNAL_ERROR", "Internal server error.", err));
     }
 };
+
+// ================================
+// Set video visibility ( is_active )
+// ================================
+const setVisibility = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { isActive } = req.body;
+        const result = await videoService.setVisibility(id, isActive);
+        return res.status(result.success ? 200 : 404).json(result);
+    } catch (err) {
+        console.error("setVisibility controller error:", err);
+        return res.status(500).json(error("INTERNAL_ERROR", "Internal server error.", err));
+    }
+};
+
 
 // ================================
 // Update video
@@ -103,7 +135,9 @@ const deleteTag = async (req, res) => {
 module.exports = {
     addVideo,
     getVideos,
+    getVideosAdmin,
     getVideoById,
+    setVisibility,
     updateVideo,
     deleteVideo,
     getTags,

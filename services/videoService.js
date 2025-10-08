@@ -10,7 +10,7 @@ const { success, error } = require("../utils/response");
 const createVideo = async (data) => {
     try {
         const id = uuidv4();
-        const { title, youtube_url, embed_url, thumbnail_url, description, createBy, tags = [] } = data;
+        const { title, youtube_url, embed_url, thumbnail_url, description, event_date, createBy, tags = [] } = data;
 
         if (!title || !youtube_url) {
             return error("INVALID_INPUT", "Title and YouTube URL are required.");
@@ -18,8 +18,8 @@ const createVideo = async (data) => {
 
         await DB.query(
             `INSERT INTO videos (id, title, youtube_url, embed_url, thumbnail_url, description, event_date, createBy)
-             VALUES (?, ?, ?, ?, ?, ?, now(), ?)`,
-            [id, title, youtube_url, embed_url, thumbnail_url, description, createBy]
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [id, title, youtube_url, embed_url, thumbnail_url, description, event_date, createBy]
         );
 
         // Attach tags if provided
@@ -34,7 +34,26 @@ const createVideo = async (data) => {
     }
 };
 
-// Get all videos (with optional search)
+// Setting video visibility
+const setVisibility = async (id, isActive) => {
+    try {
+        const [videos] = await DB.query(`SELECT * FROM videos WHERE id = ?`, [id]);
+
+        if (!videos.length) {
+            return error("VIDEO_NOT_FOUND", "Video not found.");
+        }
+
+        await DB.query(`UPDATE videos SET isActive = ?, updateDate = NOW() WHERE id = ? `, [isActive, id]);
+
+        return success("UPDATE_SUCCESS", "Visibility updated successfully.", { id, isActive });
+    } catch (err) {
+        console.error("setVisibility error:", err);
+        return error("UPDATE_FAILED", "Failed to update visibility.", err);
+    }
+};
+
+
+// Public: Get all active videos (with optional search)
 const getAllVideos = async (search = "") => {
     try {
         const like = `%${search}%`;
@@ -42,7 +61,8 @@ const getAllVideos = async (search = "") => {
         const [videos] = await DB.query(
             `SELECT * FROM videos 
              WHERE isActive = 1
-             AND (title LIKE ? OR description LIKE ?)
+             AND(title LIKE ? OR description LIKE ?)
+             AND isDeleted = 0
              ORDER BY createDate DESC`,
             [like, like]
         );
@@ -51,12 +71,13 @@ const getAllVideos = async (search = "") => {
             return error("NO_VIDEOS_FOUND", "No videos found.");
         }
 
+        // Attach tags
         for (const video of videos) {
             const [tags] = await DB.query(
                 `SELECT t.id, t.name 
                  FROM video_tags vt
                  JOIN tags t ON vt.tag_id = t.id
-                 WHERE vt.video_id = ?`,
+                 WHERE vt.video_id = ? `,
                 [video.id]
             );
             video.tags = tags;
@@ -66,6 +87,49 @@ const getAllVideos = async (search = "") => {
     } catch (err) {
         console.error("getAllVideos error:", err);
         return error("FETCH_FAILED", "Failed to fetch videos.", err);
+    }
+};
+
+// Admin: Get all videos (with optional search and date filter)
+const getAllVideosAdmin = async (search = "", startDate = null, endDate = null) => {
+    try {
+        const like = `%${search}%`;
+        let query = `
+            SELECT * FROM videos 
+            WHERE(title LIKE ? OR description LIKE ?) AND isDeleted = 0
+                `;
+        const params = [like, like];
+
+        // Optional date filter
+        if (startDate && endDate) {
+            query += ` AND createDate BETWEEN ? AND ? `;
+            params.push(startDate, endDate);
+        }
+
+        query += ` ORDER BY createDate DESC`;
+
+        const [videos] = await DB.query(query, params);
+
+        if (!videos.length) {
+            return error("NO_VIDEOS_FOUND", "No videos found.");
+        }
+
+        // Attach tags
+        for (const video of videos) {
+            const [tags] = await DB.query(
+                `SELECT t.id, t.name 
+                 FROM video_tags vt
+                 JOIN tags t ON vt.tag_id = t.id
+                 WHERE vt.video_id = ? `,
+                [video.id]
+            );
+            video.tags = tags;
+        }
+
+        return success("FETCH_SUCCESS", "Admin videos retrieved successfully.", videos);
+    } catch (err) {
+        console.error("getAllVideosAdmin error:", err);
+        return error("FETCH_FAILED", "Failed to fetch admin videos.", err);
     }
 };
 
@@ -83,7 +147,7 @@ const getVideoById = async (id) => {
             `SELECT t.id, t.name 
              FROM video_tags vt
              JOIN tags t ON vt.tag_id = t.id
-             WHERE vt.video_id = ?`,
+             WHERE vt.video_id = ? `,
             [id]
         );
         video.tags = tags;
@@ -100,21 +164,21 @@ const updateVideo = async (id, data) => {
     try {
         const { title, youtube_url, embed_url, thumbnail_url, description, event_date, isActive, tags = [] } = data;
 
-        const [exists] = await DB.query(`SELECT id FROM videos WHERE id = ?`, [id]);
+        const [exists] = await DB.query(`SELECT id FROM videos WHERE id = ? `, [id]);
         if (!exists.length) {
             return error("VIDEO_NOT_FOUND", "Video not found.");
         }
 
         await DB.query(
             `UPDATE videos 
-             SET title=?, youtube_url=?, embed_url=?, thumbnail_url=?, description=?, event_date=?, isActive=?, updateDate=NOW()
-             WHERE id=?`,
+             SET title =?, youtube_url =?, embed_url =?, thumbnail_url =?, description =?, event_date =?, isActive =?, updateDate = NOW()
+             WHERE id =? `,
             [title, youtube_url, embed_url, thumbnail_url, description, event_date, isActive, id]
         );
 
         // Update tags if provided
         if (Array.isArray(tags)) {
-            await DB.query(`DELETE FROM video_tags WHERE video_id = ?`, [id]);
+            await DB.query(`DELETE FROM video_tags WHERE video_id = ? `, [id]);
             await attachTagsToVideo(id, tags);
         }
 
@@ -128,12 +192,12 @@ const updateVideo = async (id, data) => {
 // Delete video (soft delete)
 const deleteVideo = async (id) => {
     try {
-        const [exists] = await DB.query(`SELECT id FROM videos WHERE id = ?`, [id]);
+        const [exists] = await DB.query(`SELECT id FROM videos WHERE id = ? `, [id]);
         if (!exists.length) {
             return error("VIDEO_NOT_FOUND", "Video not found.");
         }
 
-        await DB.query(`UPDATE videos SET isActive = 0, updateDate = NOW() WHERE id = ?`, [id]);
+        await DB.query(`UPDATE videos SET isActive = 0, isDeleted = 1, updateDate = NOW() WHERE id = ? `, [id]);
 
         return success("DELETE_SUCCESS", "Video deleted successfully.");
     } catch (err) {
@@ -159,11 +223,11 @@ const attachTagsToVideo = async (videoId, tagNames = []) => {
             tagId = existing[0].id;
         } else {
             tagId = uuidv4();
-            await DB.query(`INSERT INTO tags (id, name) VALUES (?, ?)`, [tagId, trimmed]);
+            await DB.query(`INSERT INTO tags(id, name) VALUES(?, ?)`, [tagId, trimmed]);
         }
 
         const videoTagId = uuidv4();
-        await DB.query(`INSERT INTO video_tags (id, video_id, tag_id) VALUES (?, ?, ?)`, [
+        await DB.query(`INSERT INTO video_tags(id, video_id, tag_id) VALUES(?, ?, ?)`, [
             videoTagId,
             videoId,
             tagId,
@@ -186,10 +250,10 @@ const getAllTags = async () => {
 // Delete tag (soft delete)
 const deleteTag = async (id) => {
     try {
-        const [exists] = await DB.query(`SELECT id FROM tags WHERE id = ?`, [id]);
+        const [exists] = await DB.query(`SELECT id FROM tags WHERE id = ? `, [id]);
         if (!exists.length) return error("TAG_NOT_FOUND", "Tag not found.");
 
-        await DB.query(`UPDATE tags SET isActive = 0 WHERE id = ?`, [id]);
+        await DB.query(`UPDATE tags SET isActive = 0 WHERE id = ? `, [id]);
         return success("DELETE_SUCCESS", "Tag deleted successfully.");
     } catch (err) {
         console.error("deleteTag error:", err);
@@ -203,6 +267,8 @@ const deleteTag = async (id) => {
 module.exports = {
     createVideo,
     getAllVideos,
+    getAllVideosAdmin,
+    setVisibility,
     getVideoById,
     updateVideo,
     deleteVideo,
