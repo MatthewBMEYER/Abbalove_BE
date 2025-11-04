@@ -20,7 +20,8 @@ const addVideo = async (req, res) => {
 const getVideos = async (req, res) => {
     try {
         const search = req.query.search || "";
-        const result = await videoService.getAllVideos(search);
+        const tag = req.query.tag || "";
+        const result = await videoService.getAllVideos(search, tag);
         return res.status(result.success ? 200 : 404).json(result);
     } catch (err) {
         console.error("getVideos controller error:", err);

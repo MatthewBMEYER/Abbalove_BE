@@ -52,32 +52,44 @@ const setVisibility = async (id, isActive) => {
     }
 };
 
-
-// Public: Get all active videos (with optional search)
-const getAllVideos = async (search = "") => {
+// Public: Get all active videos (with optional search or tag filter)
+const getAllVideos = async (search = "", tag = "") => {
     try {
         const like = `%${search}%`;
 
-        const [videos] = await DB.query(
-            `SELECT * FROM videos 
-             WHERE isActive = 1
-             AND(title LIKE ? OR description LIKE ?)
-             AND isDeleted = 0
-             ORDER BY createDate DESC`,
-            [like, like]
-        );
+        // Base query
+        let query = `
+            SELECT DISTINCT v.*
+            FROM videos v
+            LEFT JOIN video_tags vt ON vt.video_id = v.id
+            LEFT JOIN tags t ON vt.tag_id = t.id
+            WHERE v.isActive = 1
+            AND v.isDeleted = 0
+            AND (v.title LIKE ? OR v.description LIKE ?)
+        `;
+        const params = [like, like];
 
-        if (!videos.length) {
-            return error("NO_VIDEOS_FOUND", "No videos found.");
+        // Optional tag filter (by tag id or tag name)
+        if (tag) {
+            query += ` AND (t.name = ? OR t.id = ?)`;
+            params.push(tag, tag);
         }
 
-        // Attach tags
+        query += ` ORDER BY v.createDate DESC`;
+
+        const [videos] = await DB.query(query, params);
+
+        if (!videos.length) {
+            return success("NO_VIDEOS_FOUND", "No videos found.", []);
+        }
+
+        // Attach tags for each video
         for (const video of videos) {
             const [tags] = await DB.query(
                 `SELECT t.id, t.name 
                  FROM video_tags vt
                  JOIN tags t ON vt.tag_id = t.id
-                 WHERE vt.video_id = ? `,
+                 WHERE vt.video_id = ?`,
                 [video.id]
             );
             video.tags = tags;
@@ -89,6 +101,8 @@ const getAllVideos = async (search = "") => {
         return error("FETCH_FAILED", "Failed to fetch videos.", err);
     }
 };
+
+
 
 // Admin: Get all videos (with optional search and date filter)
 const getAllVideosAdmin = async (search = "", startDate = null, endDate = null) => {
@@ -111,7 +125,7 @@ const getAllVideosAdmin = async (search = "", startDate = null, endDate = null) 
         const [videos] = await DB.query(query, params);
 
         if (!videos.length) {
-            return error("NO_VIDEOS_FOUND", "No videos found.");
+            return success("NO_VIDEOS_FOUND", "No videos found.", []);
         }
 
         // Attach tags
@@ -136,10 +150,10 @@ const getAllVideosAdmin = async (search = "", startDate = null, endDate = null) 
 // Get single video by ID
 const getVideoById = async (id) => {
     try {
-        const [rows] = await DB.query(`SELECT * FROM videos WHERE id = ? AND isActive = 1`, [id]);
+        const [rows] = await DB.query(`SELECT * FROM videos WHERE id = ?`, [id]);
 
         if (!rows.length) {
-            return error("VIDEO_NOT_FOUND", "Video not found.");
+            return success("VIDEO_NOT_FOUND", "Video not found.", []);
         }
 
         const video = rows[0];
@@ -162,7 +176,7 @@ const getVideoById = async (id) => {
 // Update video details
 const updateVideo = async (id, data) => {
     try {
-        const { title, youtube_url, embed_url, thumbnail_url, description, event_date, isActive, tags = [] } = data;
+        const { title, youtube_url, embed_url, thumbnail_url, description, event_date, tags = [] } = data;
 
         const [exists] = await DB.query(`SELECT id FROM videos WHERE id = ? `, [id]);
         if (!exists.length) {
@@ -171,9 +185,9 @@ const updateVideo = async (id, data) => {
 
         await DB.query(
             `UPDATE videos 
-             SET title =?, youtube_url =?, embed_url =?, thumbnail_url =?, description =?, event_date =?, isActive =?, updateDate = NOW()
+             SET title =?, youtube_url =?, embed_url =?, thumbnail_url =?, description =?, event_date =?, updateDate = NOW()
              WHERE id =? `,
-            [title, youtube_url, embed_url, thumbnail_url, description, event_date, isActive, id]
+            [title, youtube_url, embed_url, thumbnail_url, description, event_date, id]
         );
 
         // Update tags if provided
