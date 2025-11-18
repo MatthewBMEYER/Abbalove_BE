@@ -3,6 +3,7 @@ const cors = require('cors');
 const http = require("http");
 const bodyParser = require('body-parser');
 require('dotenv').config();
+
 console.log('ENV Verification:', {
     DB_HOST: process.env.DB_HOST,
     DB_USER: process.env.DB_USER,

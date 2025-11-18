@@ -52,13 +52,26 @@ const setVisibility = async (id, isActive) => {
     }
 };
 
-// Public: Get all active videos (with optional search or tag filter)
-const getAllVideos = async (search = "", tag = "") => {
+// Public: Get all active videos (with optional search, tag filter, and pagination)
+const getAllVideos = async (search = "", tag = "", page = 1, limit = 12) => {
     try {
         const like = `%${search}%`;
+        const offset = (page - 1) * limit;
 
-        // Base query
-        let query = `
+        // Base query for counting total
+        let countQuery = `
+            SELECT COUNT(DISTINCT v.id) as total
+            FROM videos v
+            LEFT JOIN video_tags vt ON vt.video_id = v.id
+            LEFT JOIN tags t ON vt.tag_id = t.id
+            WHERE v.isActive = 1
+            AND v.isDeleted = 0
+            AND (v.title LIKE ? OR v.description LIKE ?)
+        `;
+        const countParams = [like, like];
+
+        // Base query for fetching data
+        let dataQuery = `
             SELECT DISTINCT v.*
             FROM videos v
             LEFT JOIN video_tags vt ON vt.video_id = v.id
@@ -67,20 +80,37 @@ const getAllVideos = async (search = "", tag = "") => {
             AND v.isDeleted = 0
             AND (v.title LIKE ? OR v.description LIKE ?)
         `;
-        const params = [like, like];
+        const dataParams = [like, like];
 
         // Optional tag filter (by tag id or tag name)
         if (tag) {
-            query += ` AND (t.name = ? OR t.id = ?)`;
-            params.push(tag, tag);
+            countQuery += ` AND (t.name = ? OR t.id = ?)`;
+            dataQuery += ` AND (t.name = ? OR t.id = ?)`;
+            countParams.push(tag, tag);
+            dataParams.push(tag, tag);
         }
 
-        query += ` ORDER BY v.createDate DESC`;
+        dataQuery += ` ORDER BY v.createDate DESC LIMIT ? OFFSET ?`;
+        dataParams.push(limit, offset);
 
-        const [videos] = await DB.query(query, params);
+        // Get total count
+        const [countResult] = await DB.query(countQuery, countParams);
+        const total = countResult[0]?.total || 0;
+        const totalPages = Math.ceil(total / limit);
 
-        if (!videos.length) {
-            return success("NO_VIDEOS_FOUND", "No videos found.", []);
+        // Get paginated videos
+        const [videos] = await DB.query(dataQuery, dataParams);
+
+        if (!videos.length && page === 1) {
+            return success("NO_VIDEOS_FOUND", "No videos found.", {
+                videos: [],
+                pagination: {
+                    currentPage: page,
+                    totalPages: 0,
+                    totalVideos: 0,
+                    hasMore: false
+                }
+            });
         }
 
         // Attach tags for each video
@@ -95,14 +125,20 @@ const getAllVideos = async (search = "", tag = "") => {
             video.tags = tags;
         }
 
-        return success("FETCH_SUCCESS", "Videos retrieved successfully.", videos);
+        return success("FETCH_SUCCESS", "Videos retrieved successfully.", {
+            videos: videos,
+            pagination: {
+                currentPage: page,
+                totalPages: totalPages,
+                totalVideos: total,
+                hasMore: page < totalPages
+            }
+        });
     } catch (err) {
         console.error("getAllVideos error:", err);
         return error("FETCH_FAILED", "Failed to fetch videos.", err);
     }
 };
-
-
 
 // Admin: Get all videos (with optional search and date filter)
 const getAllVideosAdmin = async (search = "", startDate = null, endDate = null) => {

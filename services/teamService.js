@@ -32,17 +32,24 @@ const getTeamMembers = async (teamId) => {
 
     const [members] = await DB.query(`
         SELECT
-        tm.*,
-        CONCAT(u.first_name, ' ', u.last_name) AS name,
-        GROUP_CONCAT(tp.label ORDER BY tp.label SEPARATOR ', ') AS positions,
-        COUNT(tp.id) AS positions_count
+            ANY_VALUE(tm.id) AS id,
+            tm.user_id,
+            tm.team_id,
+            ANY_VALUE(tm.role) AS role,
+            ANY_VALUE(tm.joined_at) AS joined_at,
+            ANY_VALUE(tm.note) AS note,
+            ANY_VALUE(tm.is_active) AS is_active,
+            ANY_VALUE(tm.created_at) AS created_at,
+            ANY_VALUE(tm.updated_at) AS updated_at,
+            ANY_VALUE(CONCAT(u.first_name, ' ', u.last_name)) AS name,
+            GROUP_CONCAT(tp.label ORDER BY tp.label SEPARATOR ', ') AS positions,
+            COUNT(tp.id) AS positions_count
         FROM team_members tm
         JOIN user u ON tm.user_id = u.id
         LEFT JOIN team_member_positions mp ON mp.team_id = tm.team_id AND mp.user_id = tm.user_id
         LEFT JOIN team_positions tp ON tp.id = mp.position_id
         WHERE tm.team_id = ?
-        GROUP BY tm.team_id, tm.user_id;
-
+        GROUP BY tm.team_id, tm.user_id
     `, [teamId]);
 
     return success("MEMBER_FETCHED", "Successfully fetched members", members);

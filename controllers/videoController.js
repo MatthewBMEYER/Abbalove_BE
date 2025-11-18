@@ -15,13 +15,16 @@ const addVideo = async (req, res) => {
 };
 
 // ================================
-// Get all videos (with optional search)
+// Get all videos (with optional search and pagination)
 // ================================
 const getVideos = async (req, res) => {
     try {
         const search = req.query.search || "";
         const tag = req.query.tag || "";
-        const result = await videoService.getAllVideos(search, tag);
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 12;
+
+        const result = await videoService.getAllVideos(search, tag, page, limit);
         return res.status(result.success ? 200 : 404).json(result);
     } catch (err) {
         console.error("getVideos controller error:", err);
