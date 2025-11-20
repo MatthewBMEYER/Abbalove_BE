@@ -50,6 +50,24 @@ const createEvent = async (req, res) => {
     }
 };
 
+// update event
+const updateEvent = async (req, res) => {
+    try {
+        const { name, type, groupId, startTime, endTime, location } = req.body;
+        const { id } = req.params;
+        const result = await eventService.updateEvent(id, name, type, groupId, startTime, endTime, location);
+        res.status(result.success ? 200 : 400).json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            success: false,
+            code: "SERVER_ERROR",
+            message: "Something went wrong.",
+        });
+    }
+};
+
+
 // delete event
 const deleteEvent = async (req, res) => {
     try {

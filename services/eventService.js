@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const DB = require("../config/db");
 const { success, error } = require("../utils/response");
+const { formatDateForMySQL } = require("../utils/dateUtils");
 
 const getAllEvent = async () => {
     const [events] = await DB.query("SELECT * FROM events");
@@ -28,6 +29,10 @@ const getAllEventByGroupId = async (groupId) => {
 }
 
 const createEvent = async (name, type, groupId, startTime, endTime, location) => {
+    // Convert ISO datetime to MySQL DATETIME format using utility
+    const mysqlStartTime = formatDateForMySQL(startTime);
+    const mysqlEndTime = formatDateForMySQL(endTime);
+
     const [group] = await DB.query(
         "SELECT * FROM comcell_group WHERE id = ?",
         [groupId]
@@ -38,7 +43,7 @@ const createEvent = async (name, type, groupId, startTime, endTime, location) =>
 
     const [existing] = await DB.query(
         "SELECT * FROM events WHERE group_id = ? AND start_time = ? AND end_time = ?",
-        [groupId, startTime, endTime]
+        [groupId, mysqlStartTime, mysqlEndTime]
     );
     if (existing.length > 0) {
         return error(
@@ -51,7 +56,7 @@ const createEvent = async (name, type, groupId, startTime, endTime, location) =>
     await DB.query(
         `INSERT INTO events (id, name, type, group_id, start_time, end_time, location, created_at, updated_at) 
      VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [eventId, name, type, groupId, startTime, endTime, location]
+        [eventId, name, type, groupId, mysqlStartTime, mysqlEndTime, location]
     );
 
     const [members] = await DB.query(
@@ -77,6 +82,21 @@ const createEvent = async (name, type, groupId, startTime, endTime, location) =>
 
     return success("EVENT_CREATED", "Event created successfully");
 };
+
+const updateEvent = async (eventId, name, type, groupId, startTime, endTime, location) => {
+    const mysqlStartTime = formatDateForMySQL(startTime);
+    const mysqlEndTime = formatDateForMySQL(endTime);
+
+    await DB.query(
+        `UPDATE events 
+         SET name = ?, type = ?, group_id = ?, start_time = ?, end_time = ?, location = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [name, type, groupId, mysqlStartTime, mysqlEndTime, location, eventId]
+    );
+
+    return success("EVENT_UPDATED", "Event updated successfully");
+};
+
 
 const deleteEvent = async (eventId) => {
     // Check if event exists
@@ -254,6 +274,7 @@ module.exports = {
     getAllEvent,
     getAllEventByGroupId,
     createEvent,
+    updateEvent,
     deleteEvent,
 
     getAttendance,
