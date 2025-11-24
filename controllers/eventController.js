@@ -2,7 +2,7 @@ const eventService = require("../services/eventService");
 
 // EVENTS ---------------------------------------
 
-// get all event 
+// get all public events
 const getAllEvent = async (req, res) => {
     try {
         const result = await eventService.getAllEvent();
@@ -17,8 +17,7 @@ const getAllEvent = async (req, res) => {
     }
 };
 
-
-// get all event by group id for comcell
+// get all events by group id (both public and private comcell events)
 const getAllEventByGroupId = async (req, res) => {
     try {
         const groupId = req.params.id;
@@ -34,11 +33,75 @@ const getAllEventByGroupId = async (req, res) => {
     }
 };
 
-// create event
+// get only comcell events by group id
+const getComcellEventsByGroupId = async (req, res) => {
+    try {
+        const groupId = req.params.id;
+        const result = await eventService.getComcellEventsByGroupId(groupId);
+        res.status(result.success ? 200 : 400).json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            success: false,
+            code: "SERVER_ERROR",
+            message: "Something went wrong.",
+        });
+    }
+};
+
+// create public event
+const createPublicEvent = async (req, res) => {
+    try {
+        const { name, type, startTime, endTime, location, description, createdBy } = req.body;
+        const result = await eventService.createPublicEvent(name, type, startTime, endTime, location, description, createdBy);
+        res.status(result.success ? 201 : 400).json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            success: false,
+            code: "SERVER_ERROR",
+            message: "Something went wrong.",
+        });
+    }
+};
+
+// create comcell event (private event for groups)
+const createComcellEvent = async (req, res) => {
+    try {
+        const { name, type, groupIds, startTime, endTime, location, description, createdBy } = req.body;
+        const result = await eventService.createComcellEvent(name, type, groupIds, startTime, endTime, location, description, createdBy);
+        res.status(result.success ? 201 : 400).json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            success: false,
+            code: "SERVER_ERROR",
+            message: "Something went wrong.",
+        });
+    }
+};
+
+// generic event creation (future-proof)
 const createEvent = async (req, res) => {
     try {
-        const { name, type, groupId, startTime, endTime, location } = req.body;
-        const result = await eventService.createEvent(name, type, groupId, startTime, endTime, location);
+        const { name, type, startTime, endTime, location, description, createdBy, isPublic, groupIds } = req.body;
+
+        const eventData = {
+            name,
+            type,
+            startTime,
+            endTime,
+            location,
+            description,
+            createdBy
+        };
+
+        const context = {
+            isPublic: isPublic !== undefined ? isPublic : true,
+            groupIds: groupIds || null
+        };
+
+        const result = await eventService.createEvent(eventData, context);
         res.status(result.success ? 201 : 400).json(result);
     } catch (err) {
         console.error(err);
@@ -53,9 +116,20 @@ const createEvent = async (req, res) => {
 // update event
 const updateEvent = async (req, res) => {
     try {
-        const { name, type, groupId, startTime, endTime, location } = req.body;
         const { id } = req.params;
-        const result = await eventService.updateEvent(id, name, type, groupId, startTime, endTime, location);
+        const { name, type, startTime, endTime, location, description, isPublic } = req.body;
+
+        const eventData = {
+            name,
+            type,
+            startTime,
+            endTime,
+            location,
+            description,
+            isPublic
+        };
+
+        const result = await eventService.updateEvent(id, eventData);
         res.status(result.success ? 200 : 400).json(result);
     } catch (err) {
         console.error(err);
@@ -66,7 +140,6 @@ const updateEvent = async (req, res) => {
         });
     }
 };
-
 
 // delete event
 const deleteEvent = async (req, res) => {
@@ -83,8 +156,6 @@ const deleteEvent = async (req, res) => {
         });
     }
 };
-
-
 
 // ATTENDANCE FOR EVENT --------------------------------
 
@@ -120,6 +191,7 @@ const updateAttendance = async (req, res) => {
     }
 };
 
+// get attendance stats
 const getAttendanceStats = async (req, res) => {
     try {
         const { groupId } = req.params;
@@ -138,11 +210,14 @@ const getAttendanceStats = async (req, res) => {
 module.exports = {
     getAllEvent,
     getAllEventByGroupId,
+    getComcellEventsByGroupId,
+    createPublicEvent,
+    createComcellEvent,
     createEvent,
+    updateEvent,
     deleteEvent,
 
     getAttendance,
     updateAttendance,
     getAttendanceStats,
-
 };

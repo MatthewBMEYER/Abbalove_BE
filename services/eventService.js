@@ -5,12 +5,171 @@ const DB = require("../config/db");
 const { success, error } = require("../utils/response");
 const { formatDateForMySQL } = require("../utils/dateUtils");
 
-const getAllEvent = async () => {
-    const [events] = await DB.query("SELECT * FROM events");
-    if (events.length === 0) {
-        return success("NOT_FOUND", "No events found");
+// Base event creation - can be used for both public and private events
+const createBaseEvent = async (eventData) => {
+    const {
+        name,
+        type,
+        startTime,
+        endTime,
+        location,
+        isPublic = 1, // Default to public
+        description = null,
+        createdBy = null
+    } = eventData;
+
+    // Convert ISO datetime to MySQL DATETIME format using utility
+    const mysqlStartTime = formatDateForMySQL(startTime);
+    const mysqlEndTime = formatDateForMySQL(endTime);
+
+    const eventId = uuidv4();
+
+    await DB.query(
+        `INSERT INTO events (id, name, type, start_time, end_time, location, is_public, description, created_by, created_at, updated_at) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [eventId, name, type, mysqlStartTime, mysqlEndTime, location, isPublic, description, createdBy]
+    );
+
+    return eventId;
+};
+
+// Create public event (uses base event creation)
+const createPublicEvent = async (name, type, startTime, endTime, location, description = null, createdBy = null) => {
+    const eventId = await createBaseEvent({
+        name,
+        type,
+        startTime,
+        endTime,
+        location,
+        isPublic: 1,
+        description,
+        createdBy
+    });
+
+    return success("EVENT_CREATED", "Public event created successfully", { eventId });
+};
+
+// Create comcell event (private event associated with groups)
+const createComcellEvent = async (name, type, groupIds, startTime, endTime, location, description = null, createdBy = null) => {
+    // Ensure groupIds is an array
+    const groupIdArray = Array.isArray(groupIds) ? groupIds : [groupIds];
+
+    // Validate all groups exist
+    const placeholders = groupIdArray.map(() => '?').join(',');
+    const [groups] = await DB.query(
+        `SELECT id FROM comcell_group WHERE id IN (${placeholders})`,
+        groupIdArray
+    );
+
+    if (groups.length !== groupIdArray.length) {
+        return error("GROUP_NOT_FOUND", "One or more groups not found");
     }
-    return success("EVENTS_FETCHED", "All events successfully fetched", events);
+
+    // Check for scheduling conflicts for each group
+    const mysqlStartTime = formatDateForMySQL(startTime);
+    const mysqlEndTime = formatDateForMySQL(endTime);
+
+    for (const groupId of groupIdArray) {
+        const [existing] = await DB.query(
+            `SELECT ce.id 
+             FROM comcell_events ce 
+             JOIN events e ON ce.event_id = e.id 
+             WHERE ce.group_id = ? AND e.start_time = ? AND e.end_time = ?`,
+            [groupId, mysqlStartTime, mysqlEndTime]
+        );
+
+        if (existing.length > 0) {
+            return error(
+                "FAILED_TO_CREATE_EVENT",
+                `Event already exists in group ${groupId} at this time`
+            );
+        }
+    }
+
+    // Create the base private event
+    const eventId = await createBaseEvent({
+        name,
+        type,
+        startTime,
+        endTime,
+        location,
+        isPublic: 0, // Private event
+        description,
+        createdBy
+    });
+
+    // Create comcell_event associations
+    const comcellEventRows = groupIdArray.map(groupId => [
+        uuidv4(),
+        eventId,
+        groupId
+    ]);
+
+    await DB.query(
+        "INSERT INTO comcell_events (id, event_id, group_id) VALUES ?",
+        [comcellEventRows]
+    );
+
+    // Create attendance records for all members of all groups
+    const allMembers = [];
+    for (const groupId of groupIdArray) {
+        const [members] = await DB.query(
+            "SELECT user_id FROM comcell_group_members WHERE group_id = ?",
+            [groupId]
+        );
+        allMembers.push(...members.map(m => m.user_id));
+    }
+
+    // Remove duplicate user IDs (users might be in multiple groups)
+    const uniqueUserIds = [...new Set(allMembers)];
+
+    if (uniqueUserIds.length > 0) {
+        const attendanceRows = uniqueUserIds.map(userId => [
+            uuidv4(),
+            eventId,
+            userId,
+            "absent", // default status
+        ]);
+
+        await DB.query(
+            "INSERT INTO event_attendance (id, event_id, user_id, status) VALUES ?",
+            [attendanceRows]
+        );
+    }
+
+    return success("EVENT_CREATED", "Comcell event created successfully", { eventId, groupIds: groupIdArray });
+};
+
+// Generic event creation function that can handle different contexts
+const createEvent = async (eventData, context = {}) => {
+    const {
+        name,
+        type,
+        startTime,
+        endTime,
+        location,
+        description = null,
+        createdBy = null
+    } = eventData;
+
+    const { isPublic = true, groupIds = null } = context;
+
+    if (isPublic) {
+        return await createPublicEvent(name, type, startTime, endTime, location, description, createdBy);
+    } else {
+        if (!groupIds || (Array.isArray(groupIds) && groupIds.length === 0)) {
+            return error("INVALID_INPUT", "Group IDs are required for private events");
+        }
+        return await createComcellEvent(name, type, groupIds, startTime, endTime, location, description, createdBy);
+    }
+};
+
+const getAllEvent = async () => {
+    const [events] = await DB.query("SELECT * FROM events WHERE is_public = 1");
+    if (events.length === 0) {
+        return success("NOT_FOUND", "No public events found");
+    }
+    return success("EVENTS_FETCHED", "All public events successfully fetched", events);
 };
 
 const getAllEventByGroupId = async (groupId) => {
@@ -19,84 +178,67 @@ const getAllEventByGroupId = async (groupId) => {
     if (group.length === 0) {
         return error("GROUP_NOT_FOUND", "No group with that id found");
     }
-    // Get all events for that group
 
-    const [events] = await DB.query("SELECT * FROM events WHERE group_id = ?", [groupId]);
-    if (events.length === 0) {
-        return success("NOT_FOUND", "No events found");
-    }
-    return success("EVENTS_FETCHED", "All events successfully fetched", events);
-}
-
-const createEvent = async (name, type, groupId, startTime, endTime, location) => {
-    // Convert ISO datetime to MySQL DATETIME format using utility
-    const mysqlStartTime = formatDateForMySQL(startTime);
-    const mysqlEndTime = formatDateForMySQL(endTime);
-
-    const [group] = await DB.query(
-        "SELECT * FROM comcell_group WHERE id = ?",
+    // Get all events for that group (both public and private events associated with the group)
+    const [events] = await DB.query(
+        `SELECT e.* 
+         FROM events e
+         LEFT JOIN comcell_events ce ON e.id = ce.event_id
+         WHERE e.is_public = 1 OR ce.group_id = ?`,
         [groupId]
     );
+
+    if (events.length === 0) {
+        return success("NOT_FOUND", "No events found for this group");
+    }
+    return success("EVENTS_FETCHED", "All events successfully fetched", events);
+};
+
+const getComcellEventsByGroupId = async (groupId) => {
+    // Check if group exists
+    const [group] = await DB.query("SELECT * FROM comcell_group WHERE id = ?", [groupId]);
     if (group.length === 0) {
         return error("GROUP_NOT_FOUND", "No group with that id found");
     }
 
-    const [existing] = await DB.query(
-        "SELECT * FROM events WHERE group_id = ? AND start_time = ? AND end_time = ?",
-        [groupId, mysqlStartTime, mysqlEndTime]
-    );
-    if (existing.length > 0) {
-        return error(
-            "FAILED_TO_CREATE_EVENT",
-            "Event already exists in this group at this time"
-        );
-    }
-
-    const eventId = uuidv4();
-    await DB.query(
-        `INSERT INTO events (id, name, type, group_id, start_time, end_time, location, created_at, updated_at) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-        [eventId, name, type, groupId, mysqlStartTime, mysqlEndTime, location]
-    );
-
-    const [members] = await DB.query(
-        "SELECT user_id FROM comcell_group_members WHERE group_id = ?",
+    // Get only comcell events for that group
+    const [events] = await DB.query(
+        `SELECT e.* 
+         FROM events e
+         JOIN comcell_events ce ON e.id = ce.event_id
+         WHERE ce.group_id = ? AND e.is_public = 0`,
         [groupId]
     );
 
-    if (members.length > 0) {
-        // prepare attendance rows
-        const attendanceRows = members.map((m) => [
-            uuidv4(),
-            eventId,
-            m.user_id,
-            "absent", // default
-        ]);
-
-        // bulk insert attendance
-        await DB.query(
-            "INSERT INTO event_attendance (id, event_id, user_id, status) VALUES ?",
-            [attendanceRows]
-        );
+    if (events.length === 0) {
+        return success("NOT_FOUND", "No comcell events found for this group");
     }
-
-    return success("EVENT_CREATED", "Event created successfully");
+    return success("EVENTS_FETCHED", "Comcell events successfully fetched", events);
 };
 
-const updateEvent = async (eventId, name, type, groupId, startTime, endTime, location) => {
+const updateEvent = async (eventId, eventData) => {
+    const {
+        name,
+        type,
+        startTime,
+        endTime,
+        location,
+        description,
+        isPublic
+    } = eventData;
+
     const mysqlStartTime = formatDateForMySQL(startTime);
     const mysqlEndTime = formatDateForMySQL(endTime);
 
     await DB.query(
         `UPDATE events 
-         SET name = ?, type = ?, group_id = ?, start_time = ?, end_time = ?, location = ?, updated_at = NOW()
+         SET name = ?, type = ?, start_time = ?, end_time = ?, location = ?, description = ?, is_public = ?, updated_at = NOW()
          WHERE id = ?`,
-        [name, type, groupId, mysqlStartTime, mysqlEndTime, location, eventId]
+        [name, type, mysqlStartTime, mysqlEndTime, location, description, isPublic, eventId]
     );
 
     return success("EVENT_UPDATED", "Event updated successfully");
 };
-
 
 const deleteEvent = async (eventId) => {
     // Check if event exists
@@ -105,9 +247,29 @@ const deleteEvent = async (eventId) => {
         return error("EVENT_NOT_FOUND", "No event with that id found");
     }
 
-    await DB.query("DELETE FROM events WHERE id = ?", [eventId]);
+    // Use transaction to ensure data consistency
+    const connection = await DB.getConnection();
+    try {
+        await connection.beginTransaction();
 
-    return success("EVENT_DELETED", "Event deleted successfully");
+        // Delete from comcell_events first (child table)
+        await connection.query("DELETE FROM comcell_events WHERE event_id = ?", [eventId]);
+
+        // Delete from event_attendance
+        await connection.query("DELETE FROM event_attendance WHERE event_id = ?", [eventId]);
+
+        // Finally delete the event
+        await connection.query("DELETE FROM events WHERE id = ?", [eventId]);
+
+        await connection.commit();
+
+        return success("EVENT_DELETED", "Event deleted successfully");
+    } catch (err) {
+        await connection.rollback();
+        throw err;
+    } finally {
+        connection.release();
+    }
 };
 
 const getAttendance = async (eventIds) => {
@@ -123,6 +285,7 @@ const getAttendance = async (eventIds) => {
             ea.event_id, 
             ea.user_id, 
             ea.status,
+            ea.notes,
             CONCAT(u.first_name, ' ', u.last_name) AS user_name,
             u.email AS user_email
      FROM event_attendance ea
@@ -181,9 +344,12 @@ const updateAttendance = async (updates) => {
 };
 
 const getAttendanceStats = async (groupId) => {
-    // 1. total events for this group
+    // 1. total events for this group (both public and private events associated with the group)
     const [[{ total_events }]] = await DB.query(
-        "SELECT COUNT(*) AS total_events FROM events WHERE group_id = ?",
+        `SELECT COUNT(DISTINCT e.id) AS total_events 
+         FROM events e
+         LEFT JOIN comcell_events ce ON e.id = ce.event_id
+         WHERE e.is_public = 1 OR ce.group_id = ?`,
         [groupId]
     );
 
@@ -203,7 +369,8 @@ const getAttendanceStats = async (groupId) => {
         `SELECT ea.user_id, COUNT(*) AS attended
      FROM event_attendance ea
      JOIN events e ON ea.event_id = e.id
-     WHERE e.group_id = ? 
+     LEFT JOIN comcell_events ce ON e.id = ce.event_id
+     WHERE (e.is_public = 1 OR ce.group_id = ?)
        AND ea.user_id IN (?) 
        AND ea.status = 'present'
      GROUP BY ea.user_id`,
@@ -215,7 +382,8 @@ const getAttendanceStats = async (groupId) => {
         `SELECT ea.user_id, ea.status, e.start_time
      FROM event_attendance ea
      JOIN events e ON ea.event_id = e.id
-     WHERE e.group_id = ? AND ea.user_id IN (?)
+     LEFT JOIN comcell_events ce ON e.id = ce.event_id
+     WHERE (e.is_public = 1 OR ce.group_id = ?) AND ea.user_id IN (?)
      ORDER BY e.start_time DESC`,
         [groupId, userIds]
     );
@@ -234,7 +402,8 @@ const getAttendanceStats = async (groupId) => {
             `SELECT ea.status
        FROM event_attendance ea
        JOIN events e ON ea.event_id = e.id
-       WHERE e.group_id = ? AND ea.user_id = ?
+       LEFT JOIN comcell_events ce ON e.id = ce.event_id
+       WHERE (e.is_public = 1 OR ce.group_id = ?) AND ea.user_id = ?
        ORDER BY e.start_time DESC`,
             [groupId, userId]
         );
@@ -267,21 +436,24 @@ const getAttendanceStats = async (groupId) => {
     return success("STATS_FETCHED", "Attendance stats fetched", results);
 };
 
-
-
-
 module.exports = {
+    // Core event functions
+    createBaseEvent,
+    createPublicEvent,
+    createComcellEvent,
+    createEvent, // Generic creator
+
+    // Query functions
     getAllEvent,
     getAllEventByGroupId,
-    createEvent,
+    getComcellEventsByGroupId,
+
+    // CRUD operations
     updateEvent,
     deleteEvent,
 
+    // Attendance functions
     getAttendance,
     updateAttendance,
     getAttendanceStats,
 };
-
-
-
-
