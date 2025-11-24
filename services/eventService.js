@@ -164,11 +164,13 @@ const createEvent = async (eventData, context = {}) => {
     }
 };
 
-const getAllEvent = async () => {
-    const [events] = await DB.query("SELECT * FROM events WHERE is_public = 1");
-    if (events.length === 0) {
-        return success("NOT_FOUND", "No public events found");
-    }
+const getAllEvent = async (month, year) => {
+
+    const [events] = await DB.query("SELECT * FROM events WHERE MONTH(start_time) = ? AND YEAR(start_time) = ? AND is_public = 1", [month, year]);
+    if (events.length === 0)
+        if (events.length === 0) {
+            return success("NOT_FOUND", "No public events found", events);
+        }
     return success("EVENTS_FETCHED", "All public events successfully fetched", events);
 };
 

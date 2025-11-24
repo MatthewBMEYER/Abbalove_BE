@@ -5,7 +5,8 @@ const eventService = require("../services/eventService");
 // get all public events
 const getAllEvent = async (req, res) => {
     try {
-        const result = await eventService.getAllEvent();
+        const { month, year } = req.query;
+        const result = await eventService.getAllEvent(month, year);
         res.status(result.success ? 200 : 400).json(result);
     } catch (err) {
         console.error(err);
