@@ -91,22 +91,19 @@ const createPosition = async (teamId, label) => {
     // Extract team type from teamId
     const teamType = extractTeamType(teamId);
 
-    // Generate unique position id (slug style)
-    const positionId = `pos-${label.toLowerCase().replace(/\s+/g, '')}`;
-
     // Check if already exists
-    const [existing] = await DB.query("SELECT * FROM team_positions WHERE id = ?", [positionId]);
+    const [existing] = await DB.query("SELECT * FROM team_positions WHERE team_type = ? AND label = ?", [teamType, label]);
     if (existing.length > 0) {
         return error("POSITION_EXISTS", "Position with that label already exists");
     }
 
     // Insert new position
     await DB.query(
-        "INSERT INTO team_positions (id, label, team_type) VALUES (?, ?, ?)",
-        [positionId, label, teamType]
+        "INSERT INTO team_positions (id, label, team_type) VALUES (uuid(), ?, ?)",
+        [label, teamType]
     );
 
-    return success("POSITION_CREATED", "New position successfully created", { id: positionId, label, teamType });
+    return success("POSITION_CREATED", "New position successfully created", { label, teamType });
 };
 
 const deletePosition = async (positionId) => {
