@@ -28,6 +28,7 @@ const teamRoutes = require('./routes/teamRoute');
 const comcellRoutes = require('./routes/comcellRoute');
 const eventRoutes = require('./routes/eventRoute');
 const videoRoutes = require('./routes/videoRoute');
+const coreEventRoutes = require('./routes/coreEventRoute');
 
 
 
@@ -37,6 +38,7 @@ app.use('/user', verifyToken, userRoutes);
 app.use('/team', verifyToken, teamRoutes);
 app.use('/comcell', verifyToken, comcellRoutes);
 app.use('/events', verifyToken, eventRoutes);
+app.use('/core/event', verifyToken, coreEventRoutes);
 app.use('/videos', verifyToken, videoRoutes);
 
 
