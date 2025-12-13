@@ -57,20 +57,38 @@ module.exports = {
                     }
 
                     const speakerSql = `
-      INSERT INTO event_speaker (
-        id, event_id, type, speaker_id, speaker_name,
-        translator_id, translator_name
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `;
+            INSERT INTO event_speaker (
+                id, event_id, type, speaker_id, speaker_name,
+                translator_id, translator_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `;
+
+                    // Handle guest vs user differently
+                    let speakerUserId = null;
+                    let speakerName = null;
+
+                    if (speakerType === 'user') {
+                        // For user type: store user_id and name
+                        speakerUserId = speaker.userId || null;
+                        speakerName = speaker.name || null;
+                    } else if (speakerType === 'guest') {
+                        // For guest type: only store name, user_id is null
+                        speakerUserId = null;
+                        speakerName = speaker.name || null;
+                    } else {
+                        // Fallback for null type
+                        speakerUserId = null;
+                        speakerName = speaker.name || null;
+                    }
 
                     const speakerValues = [
                         speakerId,
                         eventId,
-                        speakerType, // Use validated type
-                        speakerType === 'user' ? speaker.userId : null,
-                        speaker.name,
-                        null,
-                        null
+                        speakerType,
+                        speakerUserId,        // speaker_id (user_id if type='user', null if type='guest')
+                        speakerName,          // speaker_name
+                        null,                 // translator_id
+                        null                  // translator_name
                     ];
 
                     await connection.execute(speakerSql, speakerValues);
@@ -90,19 +108,27 @@ module.exports = {
                             console.warn(`Invalid translator type: "${translator.type}". Setting to null.`);
                         }
                     }
-                    const isTranslatorAlsoSpeaker = data.speakers?.some(s =>
-                        s.type && s.type.toLowerCase() === 'user' && s.userId === translator.userId
-                    );
+
+                    // Check if translator is also a speaker (only for user type)
+                    const isTranslatorAlsoSpeaker = data.speakers?.some(speaker => {
+                        // Only match if both are user type
+                        if (speaker.type?.toLowerCase() !== 'user' || translatorType !== 'user') {
+                            return false;
+                        }
+                        // Match by userId
+                        return speaker.userId === translator.userId;
+                    });
 
                     if (isTranslatorAlsoSpeaker && translatorType === 'user') {
+                        // Update existing speaker record to add translator info
                         const updateSpeakerSql = `
-        UPDATE event_speaker 
-        SET translator_id = ?, 
-            translator_name = ? 
-        WHERE event_id = ? 
-        AND speaker_id = ? 
-        AND type = 'user'
-      `;
+                UPDATE event_speaker 
+                SET translator_id = ?, 
+                    translator_name = ? 
+                WHERE event_id = ? 
+                AND speaker_id = ? 
+                AND type = 'user'
+            `;
 
                         await connection.execute(updateSpeakerSql, [
                             translator.userId || null,
@@ -111,22 +137,41 @@ module.exports = {
                             translator.userId
                         ]);
                     } else {
+                        // Create separate translator record
                         const translatorId = translator.id || uuidv4();
                         const translatorSql = `
-        INSERT INTO event_speaker (
-          id, event_id, type, speaker_id, speaker_name,
-          translator_id, translator_name
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `;
+                INSERT INTO event_speaker (
+                    id, event_id, type, speaker_id, speaker_name,
+                    translator_id, translator_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            `;
+
+                        // Handle guest vs user differently
+                        let translatorUserId = null;
+                        let translatorName = null;
+
+                        if (translatorType === 'user') {
+                            // For user type: store translator_id and translator_name
+                            translatorUserId = translator.userId || null;
+                            translatorName = translator.name || null;
+                        } else if (translatorType === 'guest') {
+                            // For guest type: only store translator_name, translator_id is null
+                            translatorUserId = null;
+                            translatorName = translator.name || null;
+                        } else {
+                            // Fallback for null type
+                            translatorUserId = null;
+                            translatorName = translator.name || null;
+                        }
 
                         const translatorValues = [
                             translatorId,
                             eventId,
                             translatorType,
-                            null,
-                            null,
-                            translatorType === 'user' ? translator.userId : null,
-                            translator.name
+                            null,                 // speaker_id (not applicable for translator-only)
+                            null,                 // speaker_name
+                            translatorUserId,     // translator_id (user_id if type='user', null if type='guest')
+                            translatorName        // translator_name
                         ];
 
                         await connection.execute(translatorSql, translatorValues);
@@ -445,54 +490,46 @@ module.exports = {
             );
 
             if (eventRows.length === 0) {
-
                 return error("EVENT_NOT_FOUND", "Event not found");
             }
 
             const event = eventRows[0];
 
-            // 2. Get speakers and translators
+            // Get SPEAKERS (including those with translators)
             const [speakerRows] = await connection.execute(
                 `SELECT 
-                id,
-                type,
-                speaker_id as userId,
-                speaker_name as name,
-                translator_id as translatorUserId,
-                translator_name as translatorName
-             FROM event_speaker 
-             WHERE event_id = ? 
-             ORDER BY created_at`,
+                es.id,
+                es.type,
+                es.speaker_id as userId,
+                es.speaker_name as name,
+                es.translator_id as translatorUserId,
+                es.translator_name as translatorName,
+                es.addedAt,
+                u.email as userEmail
+             FROM event_speaker es
+             LEFT JOIN user u ON es.speaker_id = u.id
+             WHERE es.event_id = ? 
+             AND (es.speaker_id IS NOT NULL OR es.speaker_name IS NOT NULL)`,
                 [id]
             );
 
-            // Separate speakers and translators
-            const speakers = [];
-            const translators = [];
-
-            speakerRows.forEach(row => {
-                // If it has speaker_id, it's a speaker
-                if (row.speaker_id) {
-                    speakers.push({
-                        id: row.id,
-                        type: row.type,
-                        userId: row.userId,
-                        name: row.name,
-                        translator_id: row.translatorUserId,
-                        translator_name: row.translatorName
-                    });
-                }
-
-                // If it has translator_id but no speaker_id, it's a translator-only
-                if (row.translatorUserId && !row.userId) {
-                    translators.push({
-                        id: row.id,
-                        type: row.type,
-                        userId: row.translatorUserId,
-                        name: row.translatorName
-                    });
-                }
-            });
+            // Get TRANSLATOR-ONLY (not speakers)
+            const [translatorRows] = await connection.execute(
+                `SELECT 
+                es.id,
+                es.type,
+                es.translator_id as userId,
+                es.translator_name as name,
+                es.addedAt,
+                u.email as userEmail
+             FROM event_speaker es
+             LEFT JOIN user u ON es.translator_id = u.id
+             WHERE es.event_id = ? 
+             AND es.speaker_id IS NULL 
+             AND es.speaker_name IS NULL
+             AND (es.translator_id IS NOT NULL OR es.translator_name IS NOT NULL)`,
+                [id]
+            );
 
             // 3. Get songs
             const [songRows] = await connection.execute(
@@ -523,20 +560,20 @@ module.exports = {
                 [id]
             );
 
-            // 5. Get team assignments
+            // 5. Get team assignments (NO tech_roles field)
             const [teamAssignmentRows] = await connection.execute(
                 `SELECT 
                 et.id as event_team_id,
                 t.id as team_id,
                 t.name as team_name,
                 etm.user_id,
-                u.name as user_name,  -- Assuming you have users table
+                CONCAT(u.first_name, ' ', u.last_name) as user_name,
                 etm.role_name as role_in_event,
                 etm.details
             FROM event_teams et
             JOIN teams t ON et.team_id = t.id
             LEFT JOIN event_team_member etm ON et.id = etm.event_team_id
-            LEFT JOIN users u ON etm.user_id = u.id  -- Join with users table
+            LEFT JOIN user u ON etm.user_id = u.id
             WHERE et.event_id = ?
             ORDER BY t.name, etm.role_name`,
                 [id]
@@ -554,15 +591,31 @@ module.exports = {
                     teamAssignments[teamKey] = [];
                 }
 
-                teamAssignments[teamKey].push({
+                // Build member object WITHOUT tech_roles
+                const member = {
                     user_id: row.user_id,
                     name: row.user_name,
                     role_in_event: row.role_in_event,
                     details: row.details
-                });
+                };
+
+                // Only add position_id if it exists in your table
+                if (row.position_id !== undefined && row.position_id !== null) {
+                    member.position_id = row.position_id;
+                }
+
+                teamAssignments[teamKey].push(member);
             });
 
-            // 6. Format the response to match your input structure
+            // 6. Ensure ALL required teams exist (even if empty)
+            const requiredTeams = ['team-singer', 'team-music', 'team-usher', 'team-media'];
+            requiredTeams.forEach(teamKey => {
+                if (!teamAssignments[teamKey]) {
+                    teamAssignments[teamKey] = [];
+                }
+            });
+
+            // 7. Format the response
             const result = {
                 id: event.id,
                 name: event.name,
@@ -574,29 +627,32 @@ module.exports = {
                 is_public: event.is_public === 1,
                 status: event.status,
                 "created-by": event.created_by,
-                created_at: event.created_at,
-                updated_at: event.updated_at,
-                speakers: speakers.map(speaker => ({
-                    id: speaker.id,
-                    type: speaker.type,
-                    name: speaker.name,
-                    userId: speaker.userId,
-                    translator_id: speaker.translator_id,
-                    translator_name: speaker.translator_name
+                created_at: event.created_at ? event.created_at.toISOString() : null,
+                updated_at: event.updated_at ? event.updated_at.toISOString() : null,
+
+                // Speakers - Format directly from query
+                speakers: speakerRows.map(row => ({
+                    id: row.id,
+                    type: row.type,  // "user" or "guest"
+                    name: row.name,
+                    userId: row.type === 'user' ? row.userId : null,  // null if guest
+                    email: row.type === 'user' ? row.userEmail : null,  // only for user type
+                    translator_id: row.translatorUserId,
+                    translator_name: row.translatorName,
+                    addedAt: row.addedAt ? row.addedAt.toISOString() : null
                 })),
-                translators: translators.map(translator => ({
-                    id: translator.id,
-                    type: translator.type,
-                    name: translator.name,
-                    userId: translator.userId
+
+                // Translators - Format directly from query
+                translators: translatorRows.map(row => ({
+                    id: row.id,
+                    type: row.type,  // "user" or "guest"
+                    name: row.name,
+                    userId: row.type === 'user' ? row.userId : null,  // null if guest
+                    email: row.type === 'user' ? row.userEmail : null,  // only for user type
+                    addedAt: row.addedAt ? row.addedAt.toISOString() : null
                 })),
-                songs: songRows.map(song => ({
-                    id: song.id,
-                    title: song.title,
-                    order: song.order,
-                    key: song.key,
-                    bpm: song.bpm
-                })),
+
+                // Presentations
                 presentations: presentationRows.map(presentation => ({
                     id: presentation.id,
                     name: presentation.name,
@@ -605,6 +661,17 @@ module.exports = {
                     url: presentation.url,
                     uploadedAt: presentation.uploadedAt ? presentation.uploadedAt.toISOString() : null
                 })),
+
+                // Songs
+                songs: songRows.map(song => ({
+                    id: song.id,
+                    title: song.title,
+                    order: song.order,
+                    key: song.key || null,
+                    bpm: song.bpm || null
+                })),
+
+                // Team assignments
                 team_assignments: teamAssignments
             };
 

@@ -186,7 +186,7 @@ const getAllEventByGroupId = async (groupId) => {
         `SELECT e.* 
          FROM events e
          LEFT JOIN comcell_events ce ON e.id = ce.event_id
-         WHERE e.is_public = 1 OR ce.group_id = ?`,
+         WHERE e.is_public = 0 OR ce.group_id = ?`,
         [groupId]
     );
 
