@@ -394,13 +394,28 @@ module.exports = {
         const connection = await DB.getConnection();
 
         try {
-            const currentYear = new Date().getFullYear();
-            const startDate = `${currentYear}-01-01 00:00:00`;
-            const endDate = `${currentYear}-12-31 23:59:59`;
+            // Build WHERE clause - only published, public events that have ended (past events)
+            let whereClause = 'end_time < NOW() AND status = "published" AND is_public = 1';
+            const params = [];
 
-            // Build WHERE clause - only published, public events within current year
-            let whereClause = 'start_time >= ? AND start_time <= ? AND status = "published" AND is_public = 1';
-            const params = [startDate, endDate];
+            // Apply year filter if provided
+            if (filters.year) {
+                const year = parseInt(filters.year);
+                const startDate = `${year}-01-01 00:00:00`;
+                const endDate = `${year}-12-31 23:59:59`;
+                whereClause += ' AND start_time >= ? AND start_time <= ?';
+                params.push(startDate, endDate);
+            } else {
+                // If no year filter, get all past events (not limited to current year)
+                whereClause += ' AND start_time <= NOW()';
+            }
+
+            // Apply month filter if provided (1-12)
+            if (filters.month) {
+                const month = parseInt(filters.month);
+                whereClause += ' AND MONTH(start_time) = ?';
+                params.push(month);
+            }
 
             // Apply type filter if provided
             if (filters.type && filters.type !== 'all') {
@@ -412,15 +427,15 @@ module.exports = {
             // Get events
             const [events] = await connection.execute(
                 `SELECT * FROM events 
-             WHERE ${whereClause}
-             ORDER BY start_time DESC`,
+         WHERE ${whereClause}
+         ORDER BY start_time DESC`,
                 params
             );
 
             return success("POST_EVENTS_FETCHED", "Post events retrieved successfully", {
                 events: events,
                 count: events.length,
-                year: currentYear
+                filters: filters
             });
 
         } catch (err) {
@@ -435,13 +450,28 @@ module.exports = {
         const connection = await DB.getConnection();
 
         try {
-            const currentYear = new Date().getFullYear();
-            const startDate = `${currentYear}-01-01 00:00:00`;
-            const endDate = `${currentYear}-12-31 23:59:59`;
+            // Build WHERE clause for admin - all past events that are public
+            let whereClause = 'end_time < NOW() AND is_public = 1';
+            const params = [];
 
-            // Build WHERE clause for admin
-            let whereClause = 'start_time >= ? AND start_time <= ? AND is_public = 1';
-            const params = [startDate, endDate];
+            // Apply year filter if provided
+            if (filters.year) {
+                const year = parseInt(filters.year);
+                const startDate = `${year}-01-01 00:00:00`;
+                const endDate = `${year}-12-31 23:59:59`;
+                whereClause += ' AND start_time >= ? AND start_time <= ?';
+                params.push(startDate, endDate);
+            } else {
+                // If no year filter, get all past events
+                whereClause += ' AND start_time <= NOW()';
+            }
+
+            // Apply month filter if provided (1-12)
+            if (filters.month) {
+                const month = parseInt(filters.month);
+                whereClause += ' AND MONTH(start_time) = ?';
+                params.push(month);
+            }
 
             // Filter by status if provided
             if (filters.status && filters.status !== 'all') {
@@ -460,15 +490,15 @@ module.exports = {
             // Get events
             const [events] = await connection.execute(
                 `SELECT * FROM events 
-             WHERE ${whereClause}
-             ORDER BY start_time DESC`,
+         WHERE ${whereClause}
+         ORDER BY start_time DESC`,
                 params
             );
 
             return success("POST_EVENTS_FETCHED", "Post events retrieved successfully", {
                 events: events,
                 count: events.length,
-                year: currentYear
+                filters: filters
             });
 
         } catch (err) {
